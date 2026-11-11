@@ -116,6 +116,26 @@ nav.bottom button[aria-current="true"]{background:var(--soft);color:var(--ink)}
 .pill{display:inline-flex;align-items:center;gap:6px;background:var(--soft);border-radius:999px;padding:4px 4px 4px 12px;font-size:15px}
 .pill button{min-height:32px;padding:2px 10px;border-radius:999px;font-size:13px}
 a{color:var(--ink)}
+.hdr-r{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.who{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rolechip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--ink)}
+.badge{display:inline-block;min-width:20px;padding:1px 6px;border-radius:999px;background:var(--bad);color:#ffffff;font-size:12px;font-weight:700;text-align:center;margin-left:6px;vertical-align:1px}
+.login{max-width:420px;width:100%;margin:24px auto 0}
+.pinbox{font-family:var(--f-mono);font-size:24px;letter-spacing:.3em;text-align:center}
+nav.bottom.hide{display:none}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px;margin:0}
+.kv dt{color:var(--muted)}.kv dd{margin:0;min-width:0}
+.linkbtn{background:none;border:0;padding:0;min-height:0;font-family:var(--f-mono);font-weight:700;color:var(--ink);text-decoration:underline;text-underline-offset:3px;font-size:inherit;cursor:pointer}
+.user{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line)}
+.user:last-child{border-bottom:0}
+.user .n{font-weight:600}
+.user.off .n{color:var(--muted);text-decoration:line-through}
+.user .acts{display:flex;gap:6px;flex-wrap:wrap}
+.user .acts button,.user .acts select{min-height:40px;padding:8px 10px;font-size:14px;width:auto}
+.rights{border-collapse:collapse;width:100%;font-size:14px}
+.rights td,.rights th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:center}
+.rights td:first-child,.rights th:first-child{text-align:left}
+.tablewrap{overflow-x:auto}
 @media (prefers-reduced-motion:no-preference){.view{animation:fade .15s ease-out}@keyframes fade{from{opacity:.4;transform:translateY(4px)}}}
 </style>
 </head>
@@ -123,7 +143,7 @@ a{color:var(--ink)}
 <div class="wrap">
   <header>
     <h1><span id="logoSlot"><span class="mark" aria-hidden="true"></span></span>Учёт тары</h1>
-    <span class="save" id="save">подключение…</span>
+    <span class="hdr-r"><span class="who" id="whoChip"></span><span class="save" id="save">подключение…</span></span>
   </header>
   <div id="banners"></div>
   <main id="view" class="view"></main>
@@ -131,6 +151,7 @@ a{color:var(--ink)}
 <nav class="bottom"><div>
   <button data-nav="scan" aria-current="true">Сканер</button>
   <button data-nav="list" aria-current="false">Список</button>
+  <button data-nav="admin" aria-current="false" id="navAdmin" hidden>Управление</button>
   <button data-nav="more" aria-current="false">Ещё</button>
 </div></nav>
 <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
@@ -151,8 +172,10 @@ const COND = {ok:"Годна", dirty:"Нужна мойка", broken:"Неисп
 const ACT = {
   create:"Введена в учёт", receive:"Принята на склад", "return":"Возврат от клиента", line:"Выдана на линию",
   ship:"Отгружена клиенту", inspect:"Осмотр", clean:"Помыта", torepair:"Отправлена в ремонт",
-  repaired:"Ремонт выполнен", to:"Плановое ТО", scrap:"Списана", note:"Комментарий"
+  repaired:"Ремонт выполнен", to:"Плановое ТО", scrap:"Списана", note:"Комментарий",
+  scrap_req:"Заявка на списание", scrap_rej:"Списание отклонено"
 };
+const ROLE_UI={worker:"Сотрудник",manager:"Руководитель",admin:"Администратор"};
 const DEFECTS = [
   {t:"Трещина сварного шва", s:"crit"},
   {t:"Погнут каркас или опоры", s:"crit"},
@@ -167,8 +190,11 @@ const SCRAP_REASONS = ["Износ","Не подлежит ремонту","Ут
 const DAY = 864e5;
 
 /* ========== Состояние ========== */
-let units=new Map(), events=[], role="guest", cfg={types:[{prefix:"MK",name:"Контейнер металлический"}],clients:[],returnDays:30,toDays:180,needPin:false,hasManagerPin:false,appUrlSet:false};
-const isManager=()=>role==="manager";
+let units=new Map(), events=[], pending=[], me=null, cfg={types:[{prefix:"MK",name:"Контейнер металлический"}],clients:[],returnDays:30,toDays:180,appUrlSet:false};
+const role=()=>me?me.role:"";
+const isManager=()=>role()==="manager"||role()==="admin";
+const isAdmin=()=>role()==="admin";
+const pendingOf=code=>pending.find(q=>q.code===code);
 let ready=false, conn="wait", connErr="", busy=false;
 let view="scan", openCode=null, cardEvents=[], panel=null, showOther=false, showAllHist=false, pendingCode=null;
 let listFilter="all", listQ="";
@@ -188,8 +214,8 @@ const plural=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;if(n>10&&n<20)return c;i
 const lsGet=k=>{try{return localStorage.getItem(k)||""}catch(e){return ""}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 const typeName=p=>(cfg.types.find(t=>t.prefix===p)||{}).name||p;
-const whoName=()=>lsGet("tara.who");
-const myPin=()=>lsGet("tara.pin");
+const tok=()=>lsGet("tara.token");
+const lsDel=k=>{try{localStorage.removeItem(k)}catch(e){}};
 const demoMark=u=>u&&u.demo?`<span class="demo">демо</span>`:"";
 const sortedUnits=()=>[...units.values()].sort((a,b)=>a.code<b.code?-1:1);
 
@@ -204,15 +230,28 @@ async function api(fn,...args){
       headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({fn,args})});
   }catch(e){throw new Error("нет связи с сервером")}
   let j; try{j=await r.json()}catch(e){throw new Error("сервер ответил не так, как ожидалось")}
-  if(!j.ok) throw new Error(j.error||"ошибка сервера");
+  if(!j.ok){
+    if(j.code==="auth"&&fn!=="login"){lsDel("tara.token");me=null;setTimeout(()=>showLogin(j.error),0)}
+    const er=new Error(j.error||"ошибка сервера");er.code=j.code;throw er;
+  }
   return j.data;
 }
+// вызов от имени вошедшего сотрудника (первым аргументом уходит его ключ входа)
+const apiT=(fn,...args)=>api(fn,tok(),...args);
 async function load(){
+  if(!tok()){showLogin();return}
   try{
-    const s=await api("getState",myPin());
-    units=new Map(s.units.map(u=>[u.code,u]));events=s.events;cfg=s.cfg;role=s.role;APP_URL=(s.url&&!/script\.google\.com/.test(s.url))?s.url:(location.origin+location.pathname);SHEET_URL=s.sheetUrl;
-    ready=true;setConn("on");onData();
-  }catch(e){setConn("err",e.message)}
+    const s=await apiT("getState");
+    me=s.me;pending=s.pending||[];
+    units=new Map(s.units.map(u=>[u.code,u]));events=s.events;cfg=s.cfg;APP_URL=(s.url&&!/script\.google\.com/.test(s.url))?s.url:(location.origin+location.pathname);SHEET_URL=s.sheetUrl;
+    ready=true;setConn("on");applyMe();onData();
+  }catch(e){if(e.code!=="auth")setConn("err",e.message)}
+}
+function applyMe(){
+  document.querySelector("nav.bottom").classList.remove("hide");
+  $("#whoChip").innerHTML=me?`${esc(me.name)} <span class="rolechip">${esc(ROLE_UI[me.role]||"")}</span>`:"";
+  const na=$("#navAdmin"); na.hidden=!isManager();
+  na.innerHTML=`Управление${isManager()&&pending.length?`<span class="badge">${pending.length}</span>`:""}`;
 }
 function setConn(st,msg){conn=st;connErr=msg||"";const el=$("#save");
   if(st==="wait"){el.className="save";el.textContent="подключение…"}
@@ -223,10 +262,9 @@ function setConn(st,msg){conn=st;connErr=msg||"";const el=$("#save");
 function renderBanners(){
   let h="";
   if(conn==="err") h+=`<div class="banner bad"><b>Нет связи с таблицей</b>${esc(connErr)}. Проверьте интернет и обновите страницу.</div>`;
-  if(ready&&role==="guest") h+=`<div class="banner"><b>${myPin()?"PIN не подходит":"Нужен PIN"}</b>Чтобы сохранять операции, введите PIN: Ещё → Настройки.</div>`;
-  if(ready&&!whoName()&&view==="scan") h+=`<div class="banner">Укажите, кто работает на этом устройстве: Ещё → Настройки. Имя будет в истории операций.</div>`;
+  if(ready&&isManager()&&pending.length&&view==="scan") h+=`<div class="banner"><b>Заявки на списание: ${pending.length}</b>Ждут вашего решения. <button class="linkbtn" data-go="reqs" style="font-family:var(--f-body)">Открыть</button></div>`;
   const demo=[...units.values()].filter(u=>u.demo).length;
-  if(demo&&view==="scan") h+=`<div class="banner">Сейчас в базе ${demo} ${plural(demo,"пример","примера","примеров")} с пометкой «демо». Попробуйте на них, потом удалите: Ещё → Настройки.</div>`;
+  if(demo&&view==="scan") h+=`<div class="banner">Сейчас в базе ${demo} ${plural(demo,"пример","примера","примеров")} с пометкой «демо».${isManager()?" Удалить их можно: Управление → Настройки.":""}</div>`;
   $("#banners").innerHTML=h;
 }
 function onData(){
@@ -239,8 +277,8 @@ function onData(){
   else if(view==="create") updateCreateHint();
 }
 // обновление раз в 30 секунд, чтобы видеть операции других сотрудников
-setInterval(()=>{if(document.visibilityState==="visible"&&!busy&&!panel)load()},30000);
-document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&!busy)load()});
+setInterval(()=>{if(me&&document.visibilityState==="visible"&&!busy&&!panel)load()},30000);
+document.addEventListener("visibilitychange",()=>{if(me&&document.visibilityState==="visible"&&!busy)load()});
 
 /* ========== Разбор скана ========== */
 const RU="йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ№";
@@ -301,15 +339,19 @@ function softWarn(u,act){
 
 /* ========== Навигация ========== */
 document.querySelectorAll("[data-nav]").forEach(b=>b.onclick=()=>go(b.dataset.nav));
+const ADMIN_VIEWS=["admin","reqs","journal","reports","settings","staff"];
 function go(v){
+  if(!me){showLogin();return}
+  if(ADMIN_VIEWS.includes(v)&&!isManager()) v="more";
+  if(v==="staff"&&!isAdmin()) v="admin";
   if(v!=="card"){openCode=null;panel=null}
   view=v;
-  const top={scan:"scan",card:"scan",list:"list"}[v]||"more";
+  const top=ADMIN_VIEWS.includes(v)?"admin":({scan:"scan",card:"scan",list:"list"}[v]||"more");
   document.querySelectorAll("[data-nav]").forEach(b=>b.setAttribute("aria-current",b.dataset.nav===top));
   renderBanners(); render(); window.scrollTo(0,0);
 }
 function render(){
-  ({scan:renderScan,list:renderList,more:renderMore,create:renderCreate,labels:renderLabels,batch:renderBatch,reports:renderReports,settings:renderSettings,card:()=>{}})[view]();
+  ({scan:renderScan,list:renderList,more:renderMore,create:renderCreate,labels:renderLabels,batch:renderBatch,reports:renderReports,settings:renderSettings,admin:renderAdmin,reqs:renderReqs,journal:renderJournal,staff:renderStaff,profile:renderProfile,login:()=>{},card:()=>{}})[view]();
 }
 function scanBox(batchMode){
   return `<form class="scan${batchMode?" batch":""}" id="scanForm" autocomplete="off">
@@ -354,6 +396,8 @@ function statusOf(u){
   const f=flags(u);
   let t=LOC[u.loc], s="";
   if(u.loc==="client"){t="У клиента: "+(u.client||"");s=u.ship?`вернуть до ${fD(u.ship.due)}`+(u.ship.doc?` · накл. ${u.ship.doc}`:""):""}
+  const pq=pendingOf(u.code);
+  if(pq) f.unshift({lvl:"warn",t:"Заявка на списание ждёт решения ("+pq.by+")"});
   const cls=f.some(x=>x.lvl==="bad")?"bad":f.length?"warn":"ok";
   return {cls,t:t+" · "+COND[u.cond],s:f.length?f.map(x=>x.t).join(" · "):s};
 }
@@ -384,14 +428,14 @@ function openCard(code){
 }
 async function loadHist(){
   const code=openCode;
-  try{const h=await api("getHistory",code);if(openCode===code){cardEvents=h;renderHist()}}
+  try{const h=await apiT("getHistory",code);if(openCode===code){cardEvents=h;renderHist()}}
   catch(e){const el=$("#cHist");if(el)el.innerHTML=`<p class="note">Не удалось загрузить историю.</p>`}
 }
 const ACT_UI={
   receive:u=>u.loc==="client"?"Принять возврат от клиента":"Вернуть на склад",
   line:()=>"Выдать на линию", ship:()=>"Отгрузить клиенту", repaired:()=>"Ремонт выполнен",
   torepair:()=>"Отправить в ремонт", clean:()=>"Помыта", inspect:()=>"Осмотр",
-  to:()=>"Плановое ТО выполнено", note:()=>"Комментарий", scrap:()=>"Списать"
+  to:()=>"Плановое ТО выполнено", note:()=>"Комментарий", scrap:()=>isManager()?"Списать":"Заявка на списание"
 };
 function mainActs(u){
   if(u.loc==="scrapped") return [];
@@ -412,11 +456,13 @@ function updateCard(){
     <div class="qr">${qrSvg(qrText(u.code))}</div>
     <div class="status ${st.cls}">${esc(st.t)}${st.s?`<small>${esc(st.s)}</small>`:""}</div></div>`;
   const main=mainActs(u);
-  const other=["inspect","to","torepair","note","scrap"].filter(a=>!main.includes(a)&&!whyNot(u,a));
+  const pq=pendingOf(u.code);
+  const other=["inspect","to","torepair","note","scrap"].filter(a=>!main.includes(a)&&!whyNot(u,a)&&!(a==="scrap"&&pq&&!isManager()));
   $("#cActs").innerHTML=(u.loc==="scrapped"?"":
     main.map((a,i)=>`<button class="big ${i===0?"primary":""}" data-pan="${a}">${esc(ACT_UI[a](u))}</button>`).join("")+
     `<button class="ghost" id="otherBtn" style="align-self:flex-start">${showOther?"Скрыть":"Другие действия"} ▾</button>`+
-    (showOther?`<div class="row">${other.map(a=>`<button class="${a==="scrap"?"danger":""}" data-pan="${a}">${esc(ACT_UI[a](u))}</button>`).join("")}<button data-label="${esc(u.code)}">Этикетка (PDF)</button></div>`:""));
+    (showOther?`<div class="row">${other.map(a=>`<button class="${a==="scrap"?"danger":""}" data-pan="${a}">${esc(ACT_UI[a](u))}</button>`).join("")}<button data-label="${esc(u.code)}">Этикетка (PDF)</button></div>`:""))+
+    (pq&&isManager()?reqHtml(pq,false):"");
   const ob=$("#otherBtn"); if(ob) ob.onclick=()=>{showOther=!showOther;updateCard()};
   if(panel&&whyNot(u,panel)){panel=null;$("#cPanel").innerHTML=""}
 }
@@ -432,9 +478,9 @@ function setPanel(a){
   else if(a==="torepair") body=`<label class="fld">Что сломано<input type="text" id="pNote"></label>`;
   else if(a==="repaired") body=`<label class="fld">Что сделали (необязательно)<input type="text" id="pNote"></label>`;
   else if(a==="note") body=`<label class="fld">Текст<textarea id="pNote"></textarea></label>`;
-  else if(a==="scrap") body=`<label class="fld">Причина<select id="pReason">${SCRAP_REASONS.map(r=>`<option>${r}</option>`).join("")}</select></label><label class="fld">Номер акта (если есть)<input type="text" id="pDoc"></label><p class="warnline">Списание нельзя отменить.</p>`;
+  else if(a==="scrap") body=`<label class="fld">Причина<select id="pReason">${SCRAP_REASONS.map(r=>`<option>${r}</option>`).join("")}</select></label><label class="fld">Номер акта (если есть)<input type="text" id="pDoc"></label><label class="fld">Комментарий (необязательно)<input type="text" id="pNote"></label><p class="warnline">${isManager()?"Списание нельзя отменить.":"Заявку рассмотрит руководитель. До решения тара остаётся в учёте."}</p>`;
   P.innerHTML=`<div class="card"><h2>${esc(ACT_UI[a](u))}</h2>${w?`<p class="warnline">⚠ ${esc(w)}</p>`:""}${body}
-    <button class="big ${a==="scrap"?"danger":"primary"}" id="pGo">${a==="scrap"?"Списать":"Сохранить"}</button><button class="ghost" id="pCancel">Отмена</button></div>`;
+    <button class="big ${a==="scrap"?"danger":"primary"}" id="pGo">${a==="scrap"?(isManager()?"Списать":"Отправить заявку"):"Сохранить"}</button><button class="ghost" id="pCancel">Отмена</button></div>`;
   bindChoices(P);
   $("#pCancel").onclick=()=>{panel=null;P.innerHTML=""};
   $("#pGo").onclick=submitPanel;
@@ -456,7 +502,11 @@ async function submitPanel(){
   if(a==="note"&&!p.note){toast("Напишите комментарий",1);return}
   const b=$("#pGo");b.disabled=true;b.textContent="Сохраняю…";busy=true;
   try{
-    const r=await api("doAction",code,a,p,whoName(),myPin());
+    if(a==="scrap"&&!isManager()){
+      await apiT("requestScrap",code,p);toast(`${code}: заявка на списание отправлена`);panel=null;P.innerHTML="";
+      busy=false;await load();loadHist();return;
+    }
+    const r=await apiT("doAction",code,a,p);
     toast(`${code}: ${ACT[r.evAct].toLowerCase()}`);panel=null;P.innerHTML="";
     await load(); loadHist();
   }catch(e){toast("Не сохранено: "+e.message,1);b.disabled=false;b.textContent="Сохранить"}
@@ -508,11 +558,11 @@ function renderMore(){
     <button data-go="create">Ввести новую тару<small>Присвоить номера новым контейнерам</small></button>
     <button data-go="labels">Этикетки с QR-кодом<small>Скачать PDF для печати</small></button>
     <button data-go="batch">Отгрузка или приёмка партией<small>Отсканировать много контейнеров под одну накладную</small></button>
-    ${isManager()?`<button data-go="reports">Выгрузить в Excel<small>Остатки, движение, акт списания, долги клиентов</small></button>`:""}
-    <button data-go="settings">Настройки<small>${isManager()?"PIN, клиенты, сроки, типы тары, демо-данные":"Кто работает, PIN"}</small></button>
+    <button data-go="profile">Мой профиль<small>${esc(me?me.name:"")} · сменить PIN, выйти</small></button>
   </div>`;
 }
 const backBtn=`<button class="ghost back" data-nav2="more">← Назад</button>`;
+const backAdm=`<button class="ghost back" data-nav2="admin">← Управление</button>`;
 
 /* ---------- Ввод тары ---------- */
 function maxNum(prefix){let m=0;for(const u of units.values()){if(u.code.startsWith(prefix+"-")){const n=+u.code.split("-")[1];if(n>m)m=n}}return m}
@@ -530,7 +580,7 @@ function updateCreateHint(){const h=$("#nHint");if(!h)return;const p=$("#nType")
 async function createUnits(){
   const p=$("#nType").value,q=Math.max(1,Math.min(200,+$("#nQty").value||1)),note=$("#nNote").value.trim();
   const b=$("#nGo");b.disabled=true;b.textContent="Сохраняю…";busy=true;
-  try{const r=await api("createUnits",p,q,note,whoName(),myPin());
+  try{const r=await apiT("createUnits",p,q,note);
     toast(`Введено: ${r.to-r.from+1} шт. Теперь распечатайте этикетки`);
     lastCreated=r; await load(); busy=false; go("labels");
   }catch(e){toast("Не сохранено: "+e.message,1);b.disabled=false;b.textContent="Ввести в учёт";busy=false}
@@ -639,7 +689,7 @@ async function runBatch(){
     p.client=c;p.doc=$("#bDoc").value.trim();const d=$("#bDue").value;p.due=d?dayStart(d)+DAY-1:null}
   const todo=batch.rows.filter(r=>r.state==="new"&&!whyNot(units.get(r.code),op));
   const g=$("#bGo");g.disabled=true;g.textContent="Сохраняю…";busy=true;let n=0;
-  for(const r of todo){try{await api("doAction",r.code,op,p,whoName(),myPin());r.state="done";n++}catch(e){r.state="err";r.msg=e.message;if(/PIN/.test(e.message))break}}
+  for(const r of todo){try{await apiT("doAction",r.code,op,p);r.state="done";n++}catch(e){r.state="err";r.msg=e.message;if(e.code==="auth")break}}
   busy=false;toast(`Сохранено: ${n} из ${todo.length}`,n<todo.length);await load();updateBatch();
 }
 
@@ -647,7 +697,7 @@ async function runBatch(){
 function renderReports(){
   if(!isManager()){go("more");return}
   const t=isoDay(Date.now()),m=isoDay(Date.now()-30*DAY);
-  $("#view").innerHTML=`${backBtn}<div class="stack">
+  $("#view").innerHTML=`${backAdm}<div class="stack">
    <p class="note" style="margin:0">Все данные и так лежат в Google Таблице (листы «Тара» и «Журнал»): её можно открыть и скачать целиком как Excel. Здесь — готовые отчёты.</p>
    <div class="card"><h2>Остатки сейчас</h2><p class="note" style="margin:0">Сколько где лежит и в каком состоянии, плюс полный список.</p><button class="dark" id="rStock">Скачать Excel</button></div>
    <div class="card"><h2>Тара у клиентов</h2><p class="note" style="margin:0">Кто что должен вернуть и сколько дней просрочки.</p><button class="dark" id="rDebt">Скачать Excel</button></div>
@@ -686,7 +736,7 @@ function exportDebt(){const s=debtSheet(sortedUnits());if(s.rows.length<2){toast
   saveXlsx(`Тара у клиентов ${stamp()}`,[{name:"По клиентам",rows:[["Тара у клиентов на "+fDT(Date.now())],[],["Клиент","Всего, шт.","Просрочено, шт."],...Object.entries(byC).map(([c,v])=>[c,v.n,v.od])],cols:[30,12,16]},s])}
 async function periodEvents(f,t){
   const a=dayStart($(f).value),b=dayStart($(t).value)+DAY-1; if(!(a<=b)){toast("Проверьте даты",1);return null}
-  try{return {list:await api("getEvents",a,b,myPin()),a,b}}catch(e){toast("Не удалось получить данные: "+e.message,1);return null}
+  try{return {list:await apiT("getEvents",a,b),a,b}}catch(e){toast("Не удалось получить данные: "+e.message,1);return null}
 }
 async function exportMoves(){
   const r=await periodEvents("#mFrom","#mTo");if(!r)return;if(!r.list.length){toast("За период операций нет");return}
@@ -706,27 +756,216 @@ async function exportScrap(){
   saveXlsx(`Акт списания ${num||stamp()}`,[{name:"Акт",rows,cols:[6,12,26,12,13,24,30],merges:[0,2,3,5,6].map(r=>({s:{r,c:0},e:{r,c:6}}))}]);
 }
 
-/* ---------- Настройки ---------- */
+/* ---------- Настройки (руководство) ---------- */
 function renderSettings(){
+  if(!isManager()){go("more");return}
   const demo=[...units.values()].filter(u=>u.demo).length;
-  $("#view").innerHTML=`${backBtn}<div class="stack">
-   <div class="card"><h2>Кто работает на этом устройстве</h2><input type="text" id="sWho" value="${esc(whoName())}" placeholder="Фамилия или должность"><button class="primary" id="sWhoSave">Сохранить</button><p class="note" style="margin:0">Записывается в историю каждой операции. Запоминается только на этом устройстве.</p></div>
-   ${cfg.needPin||cfg.hasManagerPin?`<div class="card"><h2>PIN</h2><p style="margin:0">Сейчас: <b>${role==="manager"?"руководитель":role==="worker"?"сотрудник":"только просмотр"}</b></p><input type="password" id="sPin" value="${esc(myPin())}" inputmode="numeric" placeholder="Введите PIN"><button id="sPinSave">Сохранить PIN</button><p class="note" style="margin:0">PIN выдаёт руководитель. Запоминается на этом устройстве.</p></div>`:""}
-   <div class="card"><h2>Клиенты</h2><div class="row" style="gap:6px">${cfg.clients.map(c=>`<span class="pill" style="flex:0 0 auto${isManager()?"":";padding-right:12px"}">${esc(c)}${isManager()?`<button data-rmclient="${esc(c)}" aria-label="Удалить">✕</button>`:""}</span>`).join("")||`<span class="note">Пока нет</span>`}</div><div class="row"><input type="text" id="sClient" placeholder="Название клиента"><button id="sClientAdd" style="flex:0 0 auto">Добавить</button></div></div>
-   ${isManager()?`<div class="card"><h2>Сроки</h2><div class="row"><label class="fld">Вернуть от клиента за, дней<input type="number" id="sRet" value="${cfg.returnDays}" inputmode="numeric"></label><label class="fld">ТО каждые, дней (0 — не следить)<input type="number" id="sTo" value="${cfg.toDays}" inputmode="numeric"></label></div><button id="sDays">Сохранить сроки</button></div>
+  $("#view").innerHTML=`${backAdm}<div class="stack">
+   <div class="card"><h2>Клиенты</h2><div class="row" style="gap:6px">${cfg.clients.map(c=>`<span class="pill" style="flex:0 0 auto">${esc(c)}<button data-rmclient="${esc(c)}" aria-label="Удалить">✕</button></span>`).join("")||`<span class="note">Пока нет</span>`}</div><div class="row"><input type="text" id="sClient" placeholder="Название клиента"><button id="sClientAdd" style="flex:0 0 auto">Добавить</button></div></div>
+   <div class="card"><h2>Сроки</h2><div class="row"><label class="fld">Вернуть от клиента за, дней<input type="number" id="sRet" value="${cfg.returnDays}" inputmode="numeric"></label><label class="fld">ТО каждые, дней (0 — не следить)<input type="number" id="sTo" value="${cfg.toDays}" inputmode="numeric"></label></div><button id="sDays">Сохранить сроки</button></div>
    <div class="card"><h2>Типы тары</h2>${cfg.types.map(t=>`<div>${esc(t.name)} — номера ${esc(t.prefix)}-00001…</div>`).join("")}<div class="row"><input type="text" id="sTName" placeholder="Название"><input type="text" id="sTPref" maxlength="4" placeholder="Буквы, напр. MS"></div><button id="sTAdd">Добавить тип</button><p class="note" style="margin:0">В номере только латинские буквы — так QR одинаково читают ТСД и телефоны.</p></div>
-   <div class="card"><h2>Демо-данные</h2>${demo?`<p class="note" style="margin:0">${demo} ${plural(demo,"пример","примера","примеров")} для пробы. Удалите перед началом работы.</p><div id="demoArea"><button class="danger" id="demoAsk">Удалить демо-данные</button></div>`:`<p class="note" style="margin:0">Демо-данных нет.</p>`}</div>`:""}
+   <div class="card"><h2>Демо-данные</h2>${demo?`<p class="note" style="margin:0">${demo} ${plural(demo,"пример","примера","примеров")} для пробы. Удалите перед началом работы.</p><div id="demoArea"><button class="danger" id="demoAsk">Удалить демо-данные</button></div>`:`<p class="note" style="margin:0">Демо-данных нет.</p>`}</div>
    ${SHEET_URL?`<p class="note" style="margin:0">Таблица с данными (откроется только у тех, кому вы дали к ней доступ): <a href="${esc(SHEET_URL)}" target="_blank" rel="noopener">открыть Google Таблицу</a></p>`:""}
   </div>`;
-  const call=async(btn,fn,...a)=>{btn.disabled=true;busy=true;try{await api(fn,...a);toast("Сохранено");await load();busy=false;renderSettings()}catch(e){toast("Не сохранено: "+e.message,1);btn.disabled=false;busy=false}};
-  $("#sWhoSave").onclick=()=>{lsSet("tara.who",$("#sWho").value.trim());toast("Сохранено");renderBanners()};
-  const sp=$("#sPinSave"); if(sp) sp.onclick=async()=>{lsSet("tara.pin",$("#sPin").value.trim());await load();toast(role==="guest"?"PIN не подходит":role==="manager"?"Вы вошли как руководитель":"Вы вошли как сотрудник",role==="guest");renderSettings()};
-  $("#sClientAdd").onclick=e=>{const v=$("#sClient").value.trim();if(v)call(e.target,"addClient",v,myPin())};
-  if(isManager()){$("#sDays").onclick=e=>call(e.target,"saveSettings",+$("#sRet").value||30,Math.max(0,+$("#sTo").value||0),myPin());
+  const call=async(btn,fn,...a)=>{btn.disabled=true;busy=true;try{await apiT(fn,...a);toast("Сохранено");await load();busy=false;renderSettings()}catch(e){toast("Не сохранено: "+e.message,1);btn.disabled=false;busy=false}};
+  $("#sClientAdd").onclick=e=>{const v=$("#sClient").value.trim();if(v)call(e.target,"addClient",v)};
+  $("#sDays").onclick=e=>call(e.target,"saveSettings",+$("#sRet").value||30,Math.max(0,+$("#sTo").value||0));
   $("#sTAdd").onclick=e=>{const n=$("#sTName").value.trim(),p=$("#sTPref").value.trim().toUpperCase();
     if(!n||!/^[A-Z]{1,4}$/.test(p)){toast("Нужно название и 1–4 латинские буквы",1);return}
-    call(e.target,"addType",p,n,myPin())};}
-  const a=$("#demoAsk"); if(a) a.onclick=()=>{$("#demoArea").innerHTML=`<div class="confirm">Удалить все демо-примеры и их историю? Настоящая тара не пострадает.<div class="row"><button class="danger" id="demoYes">Да, удалить</button><button id="demoNo">Отмена</button></div></div>`;$("#demoNo").onclick=renderSettings;$("#demoYes").onclick=e=>call(e.target,"deleteDemo",myPin())};
+    call(e.target,"addType",p,n)};
+  const a=$("#demoAsk"); if(a) a.onclick=()=>{$("#demoArea").innerHTML=`<div class="confirm">Удалить все демо-примеры и их историю? Настоящая тара не пострадает.<div class="row"><button class="danger" id="demoYes">Да, удалить</button><button id="demoNo">Отмена</button></div></div>`;$("#demoNo").onclick=renderSettings;$("#demoYes").onclick=e=>call(e.target,"deleteDemo")};
+}
+
+/* ---------- Вход ---------- */
+async function showLogin(msg){
+  view="login";me=null;ready=false;units=new Map();pending=[];
+  document.querySelector("nav.bottom").classList.add("hide");
+  $("#whoChip").innerHTML="";$("#banners").innerHTML="";
+  const V=$("#view");
+  V.innerHTML=`<div class="card login"><p class="note" style="margin:0">Загружаю список сотрудников…</p></div>`;
+  let L;
+  try{L=await api("listLogins");setConn("on")}
+  catch(e){setConn("err",e.message);V.innerHTML=`<div class="card login"><h2>Нет связи с сервером</h2><p class="note" style="margin:0">${esc(e.message)}. Проверьте интернет.</p><button class="primary" id="lgRetry">Повторить</button></div>`;$("#lgRetry").onclick=()=>showLogin();return}
+  if(view!=="login") return;
+  if(L.needSetup){
+    V.innerHTML=`<form class="card login" id="lgForm" autocomplete="off"><h2>Первый запуск</h2>
+      <p class="note" style="margin:0">Создайте учётную запись администратора. Администратор добавляет сотрудников и назначает им роли.</p>
+      <label class="fld">Ваше ФИО<input type="text" id="lgName" autocomplete="name"></label>
+      <label class="fld">Придумайте PIN (4–8 цифр)<input type="password" id="lgPin" class="pinbox" inputmode="numeric" maxlength="8"></label>
+      <label class="fld">Повторите PIN<input type="password" id="lgPin2" class="pinbox" inputmode="numeric" maxlength="8"></label>
+      <button class="big primary" type="submit" id="lgGo">Создать и войти</button></form>`;
+    $("#lgForm").onsubmit=async e=>{e.preventDefault();
+      const n=$("#lgName").value.trim(),p=$("#lgPin").value.trim();
+      if(p!==$("#lgPin2").value.trim()){toast("PIN-коды не совпадают",1);return}
+      const b=$("#lgGo");b.disabled=true;
+      try{afterLogin(await api("setupAdmin",n,p))}catch(er){toast(er.message,1);b.disabled=false}};
+    return;
+  }
+  const last=lsGet("tara.lastUser");
+  V.innerHTML=`<form class="card login" id="lgForm" autocomplete="off"><h2>Вход</h2>
+    ${msg?`<p class="warnline">${esc(msg)}</p>`:""}
+    <label class="fld">Кто вы<select id="lgUser"><option value="">— выберите себя —</option>${L.users.map(u=>`<option value="${esc(u.id)}" ${u.id===last?"selected":""}>${esc(u.name)}</option>`).join("")}</select></label>
+    <label class="fld">PIN<input type="password" id="lgPin" class="pinbox" inputmode="numeric" maxlength="8" autocomplete="off"></label>
+    <button class="big primary" type="submit" id="lgGo">Войти</button>
+    <p class="note" style="margin:0">Нет в списке или забыли PIN — обратитесь к администратору.</p></form>`;
+  if(last&&!matchMedia("(pointer:coarse)").matches) $("#lgPin").focus();
+  $("#lgForm").onsubmit=async e=>{e.preventDefault();
+    const id=$("#lgUser").value,p=$("#lgPin").value.trim();
+    if(!id){toast("Выберите себя в списке",1);return}
+    if(!p){toast("Введите PIN",1);return}
+    const b=$("#lgGo");b.disabled=true;b.textContent="Вхожу…";
+    try{const r=await api("login",id,p);lsSet("tara.lastUser",id);afterLogin(r)}
+    catch(er){toast(er.message,1);b.disabled=false;b.textContent="Войти";$("#lgPin").value="";$("#lgPin").focus()}};
+}
+async function afterLogin(r){
+  lsSet("tara.token",r.token);me=r.me;applyMe();
+  toast("Здравствуйте, "+me.name);
+  go("scan");await load();
+}
+function logout(){lsDel("tara.token");showLogin()}
+
+/* ---------- Мой профиль ---------- */
+function renderProfile(){
+  $("#view").innerHTML=`${backBtn}<div class="stack">
+    <div class="card"><h2>${esc(me.name)}</h2><p class="note" style="margin:0">Роль: ${esc(ROLE_UI[me.role])}</p></div>
+    <form class="card" id="pfForm" autocomplete="off"><h2>Сменить PIN</h2>
+      <label class="fld">Текущий PIN<input type="password" id="pfOld" inputmode="numeric" maxlength="8"></label>
+      <label class="fld">Новый PIN (4–8 цифр)<input type="password" id="pfNew" inputmode="numeric" maxlength="8"></label>
+      <label class="fld">Повторите новый PIN<input type="password" id="pfNew2" inputmode="numeric" maxlength="8"></label>
+      <button class="primary" type="submit" id="pfGo">Сменить PIN</button>
+      <p class="note" style="margin:0">На других ваших устройствах после смены нужно будет войти заново.</p></form>
+    <button class="big danger" id="logoutBtn">Выйти</button>
+    <p class="note" style="margin:0">Выходите, если телефоном или ТСД будет пользоваться другой сотрудник: все операции записываются на того, кто вошёл.</p></div>`;
+  $("#logoutBtn").onclick=logout;
+  $("#pfForm").onsubmit=async e=>{e.preventDefault();
+    const o=$("#pfOld").value.trim(),n=$("#pfNew").value.trim();
+    if(n!==$("#pfNew2").value.trim()){toast("Новые PIN-коды не совпадают",1);return}
+    const b=$("#pfGo");b.disabled=true;
+    try{const r=await apiT("changeMyPin",o,n);lsSet("tara.token",r.token);toast("PIN изменён");renderProfile()}
+    catch(er){toast(er.message,1);b.disabled=false}};
+}
+
+/* ---------- Управление (руководство) ---------- */
+function renderAdmin(){
+  const act=[...units.values()].filter(u=>u.loc!=="scrapped");
+  const n=l=>act.filter(u=>u.loc===l).length;
+  const od=act.filter(u=>u.loc==="client"&&u.ship&&u.ship.due<Date.now()).length;
+  $("#view").innerHTML=`<div class="stack">
+    <div class="tiles">
+      <button class="tile" data-flt="wh"><span class="v">${n("wh")}</span><span class="l">на складе</span></button>
+      <button class="tile ${od?"alert":""}" data-flt="client"><span class="v">${n("client")}</span><span class="l">у клиентов</span>${od?`<span class="s">просрочено: ${od}</span>`:""}</button>
+      <button class="tile" data-flt="repair"><span class="v">${n("repair")}</span><span class="l">в ремонте</span></button>
+      <button class="tile ${pending.length?"alert":""}" data-go="reqs"><span class="v">${pending.length}</span><span class="l">заявок на списание</span></button>
+    </div>
+    <div class="menu">
+      <button data-go="reqs"><span>Заявки на списание${pending.length?`<span class="badge">${pending.length}</span>`:""}</span><small>Подтвердить или отклонить</small></button>
+      <button data-go="journal">Журнал операций<small>Кто, что и когда делал — с фильтрами</small></button>
+      <button data-go="reports">Выгрузить в Excel<small>Остатки, движение, акт списания, долги клиентов</small></button>
+      <button data-go="settings">Настройки<small>Клиенты, сроки, типы тары, демо-данные</small></button>
+      ${isAdmin()?`<button data-go="staff">Сотрудники и доступ<small>Добавить, роль, новый PIN, заблокировать</small></button>`:""}
+    </div></div>`;
+}
+function reqHtml(q,withCode){
+  const decided=q.status&&q.status!=="pending";
+  return `<div class="card" data-req="${esc(q.id)}">
+    <div class="row" style="justify-content:space-between;align-items:baseline"><b style="flex:1 1 auto">${withCode?`<button class="linkbtn" data-open="${esc(q.code)}">${esc(q.code)}</button> · `:""}Заявка на списание</b><span class="note" style="flex:0 0 auto">${fDT(q.ts)}</span></div>
+    <dl class="kv"><dt>Подал</dt><dd>${esc(q.by)}</dd><dt>Причина</dt><dd>${esc(q.reason)}</dd>${q.note?`<dt>Комментарий</dt><dd>${esc(q.note)}</dd>`:""}${q.doc?`<dt>Акт</dt><dd>${esc(q.doc)}</dd>`:""}</dl>
+    ${decided?`<p class="${q.status==="done"?"note":"warnline"}" style="margin:0">${q.status==="done"?"Списано":"Отклонено"} · ${esc(q.decidedBy)} · ${fDT(q.decidedTs)}${q.comment?" · «"+esc(q.comment)+"»":""}</p>`
+    :`<input type="text" data-rc placeholder="Комментарий (при отказе обязателен)">
+      <div class="row"><button class="danger" data-dec="1">Списать</button><button data-dec="0">Отклонить</button></div>`}
+  </div>`;
+}
+async function decide(btn){
+  const box=btn.closest("[data-req]"),id=box.dataset.req,ok=btn.dataset.dec==="1",inp=box.querySelector("[data-rc]"),cm=inp?inp.value.trim():"";
+  if(!ok&&!cm){toast("Напишите, почему отклонено",1);inp.focus();return}
+  box.querySelectorAll("button,input").forEach(b=>b.disabled=true);busy=true;
+  try{await apiT("decideRequest",id,ok,cm);toast(ok?"Списано":"Заявка отклонена");busy=false;await load();
+    if(view==="reqs")renderReqs();else if(view==="card"){updateCard();loadHist()}}
+  catch(er){toast("Не сохранено: "+er.message,1);box.querySelectorAll("button,input").forEach(b=>b.disabled=false)}
+  busy=false;
+}
+async function renderReqs(){
+  $("#view").innerHTML=`${backAdm}<div class="stack" id="rqBox"><p class="note">Загружаю…</p></div>`;
+  try{
+    const list=await apiT("listRequests"); if(view!=="reqs") return;
+    const pend=list.filter(q=>q.status==="pending"),done=list.filter(q=>q.status!=="pending");
+    $("#rqBox").innerHTML=`<h2>Ждут решения: ${pend.length}</h2>${pend.length?pend.map(q=>reqHtml(q,true)).join(""):`<p class="note" style="margin:0">Новых заявок нет.</p>`}
+      ${done.length?`<h2 style="margin-top:10px">Решённые</h2>${done.map(q=>reqHtml(q,true)).join("")}`:""}`;
+  }catch(e){const b=$("#rqBox");if(b)b.innerHTML=`<p class="warnline">Не удалось загрузить: ${esc(e.message)}</p>`}
+}
+let jData=[];
+function renderJournal(){
+  const t=isoDay(Date.now()),w=isoDay(Date.now()-7*DAY);
+  $("#view").innerHTML=`${backAdm}<div class="stack"><div class="card"><h2>Журнал операций</h2>
+    <div class="row"><label class="fld">С<input type="date" id="jFrom" value="${w}"></label><label class="fld">По<input type="date" id="jTo" value="${t}"></label></div>
+    <button class="dark" id="jGo">Показать</button>
+    <div class="row"><label class="fld">Сотрудник<select id="jWho"><option value="">Все</option></select></label><label class="fld">Операция<select id="jAct"><option value="">Все</option>${Object.entries(ACT).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join("")}</select></label></div>
+    <input type="text" id="jQ" placeholder="Номер тары или клиент"></div><div id="jOut"></div></div>`;
+  $("#jGo").onclick=loadJournal;["jWho","jAct"].forEach(id=>$("#"+id).onchange=drawJournal);$("#jQ").oninput=drawJournal;
+  loadJournal();
+}
+async function loadJournal(){
+  const a=dayStart($("#jFrom").value),b=dayStart($("#jTo").value)+DAY-1;
+  if(!(a<=b)){toast("Проверьте даты",1);return}
+  $("#jOut").innerHTML=`<p class="note">Загружаю…</p>`;
+  try{jData=(await apiT("getEvents",a,b)).sort((x,y)=>y.ts-x.ts);if(view!=="journal")return;
+    const sel=$("#jWho"),cur=sel.value,who=[...new Set(jData.map(e=>e.who).filter(Boolean))].sort((x,y)=>x.localeCompare(y,"ru"));
+    sel.innerHTML=`<option value="">Все</option>`+who.map(w=>`<option ${w===cur?"selected":""}>${esc(w)}</option>`).join("");
+    drawJournal();
+  }catch(e){$("#jOut").innerHTML=`<p class="warnline">Не удалось загрузить: ${esc(e.message)}</p>`}
+}
+function drawJournal(){
+  const el=$("#jOut");if(!el)return;
+  const w=$("#jWho").value,a=$("#jAct").value,q=$("#jQ").value.trim().toLowerCase();
+  const list=jData.filter(e=>(!w||e.who===w)&&(!a||e.act===a)&&(!q||[e.code,e.client].join(" ").toLowerCase().includes(q)));
+  if(!list.length){el.innerHTML=`<p class="note">Операций не найдено.</p>`;return}
+  el.innerHTML=`<p class="note" style="margin:0 0 8px">${list.length} ${plural(list.length,"операция","операции","операций")}${list.length>300?", показаны последние 300":""}</p>
+    <div class="card"><ul class="hist">${list.slice(0,300).map(e=>{const d=[];if(e.client)d.push(e.client);if(e.doc)d.push(e.doc);if(e.reason)d.push(e.reason);if(e.note)d.push("«"+e.note+"»");
+      return `<li><button class="linkbtn" data-open="${esc(e.code)}">${esc(e.code)}</button> · <b>${esc(ACT[e.act]||e.act)}</b>${d.length?`<div class="d">${esc(d.join(" · "))}</div>`:""}<div class="w">${fDT(e.ts)}${e.who?" · "+esc(e.who):""}</div></li>`}).join("")}</ul></div>`;
+}
+
+/* ---------- Сотрудники (администратор) ---------- */
+const genPin=()=>String(Math.floor(1000+Math.random()*9000));
+async function renderStaff(){
+  if(!isAdmin()){go("admin");return}
+  $("#view").innerHTML=`${backAdm}<div class="stack">
+    <form class="card" id="uForm" autocomplete="off"><h2>Добавить сотрудника</h2>
+      <label class="fld">ФИО<input type="text" id="uName"></label>
+      <div class="row"><label class="fld">Роль<select id="uRole">${Object.entries(ROLE_UI).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+      <label class="fld">PIN (4–8 цифр)<input type="text" id="uPin" inputmode="numeric" maxlength="8" value="${genPin()}"></label></div>
+      <button class="primary" type="submit" id="uAdd">Добавить</button>
+      <p class="note" style="margin:0">Сообщите PIN сотруднику лично. В таблице он хранится только в зашифрованном виде: посмотреть его потом нельзя, можно только задать новый.</p></form>
+    <div class="card"><h2>Сотрудники</h2><div id="uList"><p class="note" style="margin:0">Загружаю…</p></div></div>
+    <div class="card"><h2>Кто что может</h2><div class="tablewrap"><table class="rights">
+      <tr><th></th><th>Сотр.</th><th>Рук.</th><th>Админ</th></tr>
+      <tr><td>Сканер, карточка, история</td><td>✓</td><td>✓</td><td>✓</td></tr>
+      <tr><td>Выдача, отгрузка, приёмка, осмотр, ремонт</td><td>✓</td><td>✓</td><td>✓</td></tr>
+      <tr><td>Ввод тары, этикетки, партии</td><td>✓</td><td>✓</td><td>✓</td></tr>
+      <tr><td>Списание</td><td>заявка</td><td>✓</td><td>✓</td></tr>
+      <tr><td>Заявки, журнал, Excel, настройки</td><td>—</td><td>✓</td><td>✓</td></tr>
+      <tr><td>Сотрудники и доступ</td><td>—</td><td>—</td><td>✓</td></tr></table></div></div></div>`;
+  $("#uForm").onsubmit=async e=>{e.preventDefault();
+    const n=$("#uName").value.trim(),r=$("#uRole").value,p=$("#uPin").value.trim(),b=$("#uAdd");b.disabled=true;
+    try{await apiT("addUser",n,r,p);toast(`${n} добавлен(а). PIN: ${p}`);renderStaff()}catch(er){toast(er.message,1);b.disabled=false}};
+  drawStaff();
+}
+async function drawStaff(){
+  const el=$("#uList");if(!el)return;
+  try{const list=(await apiT("listUsers")).sort((a,b)=>(b.active-a.active)||a.name.localeCompare(b.name,"ru"));if(view!=="staff")return;
+    el.innerHTML=list.map(u=>{const self=u.id===me.id;return `<div class="user ${u.active?"":"off"}" data-uid="${esc(u.id)}">
+      <div style="min-width:0"><div class="n">${esc(u.name)}${self?" (вы)":""}</div><div class="note">${esc(ROLE_UI[u.role])}${u.active?"":" · заблокирован"} · ${u.lastLogin?"вход "+fDT(u.lastLogin):"ещё не входил(а)"}</div></div>
+      <div class="acts">${self?"":`<select data-urole aria-label="Роль">${Object.entries(ROLE_UI).map(([k,v])=>`<option value="${k}" ${k===u.role?"selected":""}>${v}</option>`).join("")}</select>`}
+        <button data-ureset>Новый PIN</button>${self?"":`<button data-utoggle class="${u.active?"danger":""}">${u.active?"Заблокировать":"Вернуть доступ"}</button>`}</div>
+      <div data-uresetbox hidden style="flex-basis:100%"><div class="row"><input type="text" inputmode="numeric" maxlength="8" value="${genPin()}" data-unewpin><button class="primary" data-usavepin style="flex:0 0 auto">Сохранить PIN</button></div></div></div>`}).join("");
+    el.onchange=async e=>{const s=e.target.closest("[data-urole]");if(!s)return;const id=s.closest("[data-uid]").dataset.uid;s.disabled=true;
+      try{await apiT("updateUser",id,{role:s.value});toast("Роль изменена")}catch(er){toast(er.message,1)}drawStaff()};
+    el.onclick=async e=>{const row=e.target.closest("[data-uid]");if(!row)return;const id=row.dataset.uid;
+      if(e.target.closest("[data-ureset]")){const bx=row.querySelector("[data-uresetbox]");bx.hidden=!bx.hidden;return}
+      if(e.target.closest("[data-usavepin]")){const p=row.querySelector("[data-unewpin]").value.trim();e.target.disabled=true;
+        try{await apiT("resetPin",id,p);toast("Новый PIN: "+p+". Сообщите его сотруднику");drawStaff()}catch(er){toast(er.message,1);e.target.disabled=false}return}
+      const tg=e.target.closest("[data-utoggle]");if(tg){const on=row.classList.contains("off");tg.disabled=true;
+        try{await apiT("updateUser",id,{active:on});toast(on?"Доступ возвращён":"Сотрудник заблокирован")}catch(er){toast(er.message,1)}drawStaff()}};
+  }catch(e){el.innerHTML=`<p class="warnline">Не удалось загрузить: ${esc(e.message)}</p>`}
 }
 
 /* ========== Камера ========== */
@@ -758,14 +997,14 @@ document.addEventListener("click",e=>{
   const lf=e.target.closest("[data-lf]");if(lf){listFilter=lf.dataset.lf;document.querySelectorAll("[data-lf]").forEach(b=>b.setAttribute("aria-pressed",b===lf));listBody();return}
   const lb=e.target.closest("[data-label]");if(lb){labelsPdf([lb.dataset.label],"t58",lb);return}
   const br=e.target.closest("[data-brm]");if(br){batch.rows=batch.rows.filter(r=>r.code!==br.dataset.brm);updateBatch();return}
-  const rc=e.target.closest("[data-rmclient]");if(rc){rc.disabled=true;api("removeClient",rc.dataset.rmclient,myPin()).then(load).then(()=>view==="settings"&&renderSettings()).catch(er=>toast("Не удалено: "+er.message,1));return}
+  const rc=e.target.closest("[data-rmclient]");if(rc){rc.disabled=true;apiT("removeClient",rc.dataset.rmclient).then(load).then(()=>view==="settings"&&renderSettings()).catch(er=>toast("Не удалено: "+er.message,1));return}
+  const dc=e.target.closest("[data-dec]");if(dc){decide(dc);return}
 });
 
 /* ========== Старт: открытие по ссылке из QR (…/exec?c=MK-00003) ========== */
 if(LOGO_SRC){const im=new Image();im.className="logo";im.alt="";im.src=LOGO_SRC;im.onload=()=>{const sl=$("#logoSlot");sl.innerHTML="";sl.appendChild(im)}}
-render();
 {const c=new URLSearchParams(location.search).get("c");if(c){const code=parseCode(c);if(code)pendingCode=code}}
-load();
+if(tok()){render();load()}else showLogin();
 </script>
 </body>
 </html>
